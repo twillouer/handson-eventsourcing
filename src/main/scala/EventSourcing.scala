@@ -1,4 +1,4 @@
-import scala.util.Try
+import scala.util.{Success, Try}
 
 object Deck {
 
@@ -153,21 +153,23 @@ object EventSourcingTest extends App {
     val startedDeck: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: Nil
     val simpleDeck: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 0, CardDigit(9, Red)) :: Nil
     val simpleDeckKickBack: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: CardPlayed(1, 2, CardKickBack(Red)) :: Nil
+    val simpleDeckKickBackAndMore: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: CardPlayed(1, 2, CardKickBack(Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: Nil
   }
 
 
-  def started_game {
-    // Given
-    val given = Given.emptyDeck
-    val command = StartGame(1, 4, CardDigit(3, Red))
+  def when(given: List[Event], command: Command): Event = {
+    decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+  }
 
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+  case class Given(given: List[Event])
 
-    // Then
+  def test(given: List[Event])(when: Command)(then: Try[Event] => Boolean) = {
+    val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), when))
     println(result)
-    require(result == GameStarted(1, 4, CardDigit(3, Red)))
+    require(then(result))
   }
+
+  def started_game = test(Given.emptyDeck)(StartGame(1, 4, CardDigit(3, Red)))(_ == Success(GameStarted(1, 4, CardDigit(3, Red))))
 
   def cannot_start_both {
     // Given
@@ -207,96 +209,23 @@ object EventSourcingTest extends App {
     require(result.isSuccess)
   }
 
-  def next_card_is_same_color {
-    // Given
-    val given = Given.simpleDeck
-    val command = PlayCard(1, 2, CardDigit(3, Red))
+  def next_card_is_same_color = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Red)))(_ == Success(CardPlayed(1, 2, CardDigit(3, Red))))
 
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+  def next_card_is_same_number = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(9, Yellow)))(_ == Success(CardPlayed(1, 2, CardDigit(9, Yellow))))
 
-    // Then
-    println(result)
-    require(result == CardPlayed(1, 2, CardDigit(3, Red)))
-  }
+  def next_card_is_not_same_color_not_number_but_same_player = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 2, CardDigit(3, Yellow))))
 
-  def next_card_is_same_number {
-    // Given
-    val given = Given.simpleDeck
-    val command = PlayCard(1, 2, CardDigit(9, Yellow))
+  def next_card_is_not_same_color_not_number = test(Given.simpleDeck)(PlayCard(1, 3, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 3, CardDigit(3, Yellow))))
 
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+  def bad_player_try_to_play = test(Given.simpleDeck)(PlayCard(1, 1, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 1, CardDigit(3, Yellow))))
 
-    // Then
-    println(result)
-    require(result == CardPlayed(1, 2, command.card))
-  }
+  def kickback_must_change_direction_next_player_failed = test(Given.simpleDeckKickBack)(PlayCard(1, 2, CardDigit(3, Red)))(_ == Success(PlayerFailed(1, 2, CardDigit(3, Red))))
 
-  def next_card_is_not_same_color_not_number_but_same_player {
-    // Given
-    val given = Given.simpleDeck
-    val command = PlayCard(1, 2, CardDigit(3, Yellow))
+  def kickback_must_change_direction_next_player_ok = test(Given.simpleDeckKickBack)(PlayCard(1, 1, CardDigit(3, Red)))(_ == Success(CardPlayed(1, 1, CardDigit(3, Red))))
 
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+  def kickback_can_be_added_after_a_kickback = test(Given.simpleDeckKickBack)(PlayCard(1, 1, CardKickBack(Yellow)))(_ == Success(CardPlayed(1, 1, CardKickBack(Yellow))))
 
-    // Then
-    println(result)
-    require(result == PlayerFailed(1, 2, command.card))
-  }
-
-  def next_card_is_not_same_color_not_number {
-    // Given
-    val given = Given.simpleDeck
-    val command = PlayCard(1, 3, CardDigit(3, Yellow))
-
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
-
-    // Then
-    println(result)
-    require(result == PlayerFailed(1, 3, command.card))
-  }
-
-  def bad_player_try_to_play {
-    // Given
-    val given = Given.simpleDeck
-    val command = PlayCard(1, 1, CardDigit(3, Yellow))
-
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
-
-    // Then
-    println(result)
-    require(result == PlayerFailed(1, 1, command.card))
-  }
-
-  def kickback_must_change_direction_next_player_failed {
-    // Given
-    val given = Given.simpleDeckKickBack
-    val command = PlayCard(1, 2, CardDigit(3, Red))
-
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
-
-    // Then
-    println(result)
-    require(result == PlayerFailed(1, 2, command.card))
-  }
-
-  def kickback_must_change_direction_next_player_ok {
-    // Given
-    val given = Given.simpleDeckKickBack
-    val command = PlayCard(1, 1, CardDigit(3, Red))
-
-    // When
-    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
-
-    // Then
-    println(result)
-    require(result == CardPlayed(1, 1, command.card))
-  }
+  def kickback_is_durability_saved = test(Given.simpleDeckKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Yellow)))(_ == Success(CardPlayed(1, 0, CardDigit(9, Yellow))))
 
   cannot_start_both
   enough_players
@@ -309,4 +238,6 @@ object EventSourcingTest extends App {
   bad_player_try_to_play
   kickback_must_change_direction_next_player_failed
   kickback_must_change_direction_next_player_ok
+  kickback_can_be_added_after_a_kickback
+  kickback_is_durability_saved
 }
