@@ -31,8 +31,7 @@ object Deck {
     def color: Color.Color
   }
 
-  case class CardDigit(digit: Digit, color: Color.Color) extends Card {
-  }
+  case class CardDigit(digit: Digit, color: Color.Color) extends Card
 
   case class CardKickBack(color: Color.Color) extends Card
 
@@ -113,15 +112,14 @@ object EventSourcing extends App {
   def cardLegal(lastCard: Card, newCard: Card): Boolean = {
     if (lastCard.color == newCard.color) true
     else
-      lastCard match {
-        case ckb: CardKickBack => newCard.isInstanceOf[CardKickBack]
-        case cd: CardDigit =>
-          newCard match {
-            case newCardCD: CardDigit => newCardCD.digit == cd.digit
-            case _ => false
-          }
+      (lastCard, newCard) match {
+        case (ckb: CardKickBack, _) => newCard.isInstanceOf[CardKickBack]
+        case (cd: CardDigit, newCardCD: CardDigit) => newCardCD.digit == cd.digit
+        case _ => false
       }
   }
+
+  def appli(state: State, event: List[Event]): State = event.foldLeft(state)((s, e) => appli(s, e))
 
   def appli(state: State, event: Event): State = {
     (event, state) match {
@@ -154,6 +152,7 @@ object EventSourcingTest extends App {
     val simpleDeck: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 0, CardDigit(9, Red)) :: Nil
     val simpleDeckKickBack: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: CardPlayed(1, 2, CardKickBack(Red)) :: Nil
     val simpleDeckKickBackAndMore: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: CardPlayed(1, 2, CardKickBack(Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: Nil
+    val startedKickBackAndMore: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardKickBack(Red)) :: Nil
   }
 
 
@@ -171,43 +170,11 @@ object EventSourcingTest extends App {
 
   def started_game = test(Given.emptyDeck)(StartGame(1, 4, CardDigit(3, Red)))(_ == Success(GameStarted(1, 4, CardDigit(3, Red))))
 
-  def cannot_start_both {
-    // Given
-    val given = Given.startedDeck
-    val command = StartGame(1, 4, CardDigit(3, Red))
+  def cannot_start_both = test(Given.startedDeck)(StartGame(1, 4, CardDigit(3, Red)))(p => p.isFailure)
 
-    // When
-    val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command))
+  def not_enough_players = test(Given.emptyDeck)(StartGame(1, 1, CardDigit(3, Red)))(p => p.isFailure)
 
-    // Then
-    require(result.isFailure)
-  }
-
-  def not_enough_players {
-    // Given
-    val given = Given.emptyDeck
-    val command = StartGame(1, 1, CardDigit(3, Red))
-
-
-    // When
-    val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command))
-
-    // Then
-    require(result.isFailure)
-  }
-
-  def enough_players {
-    // Given
-    val given = Given.emptyDeck
-    val command = StartGame(1, 3, CardDigit(3, Red))
-
-
-    // When
-    val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command))
-
-    // Then
-    require(result.isSuccess)
-  }
+  def enough_players = test(Given.emptyDeck)(StartGame(1, 3, CardDigit(3, Red)))(p => p.isSuccess)
 
   def next_card_is_same_color = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Red)))(_ == Success(CardPlayed(1, 2, CardDigit(3, Red))))
 
@@ -227,6 +194,8 @@ object EventSourcingTest extends App {
 
   def kickback_is_durability_saved = test(Given.simpleDeckKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Yellow)))(_ == Success(CardPlayed(1, 0, CardDigit(9, Yellow))))
 
+  def kickback_is_first_next_player_is_0 = test(Given.startedKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Red)))(_ == Success(CardPlayed(1, 0, CardDigit(9, Red))))
+
   cannot_start_both
   enough_players
   not_enough_players
@@ -240,4 +209,5 @@ object EventSourcingTest extends App {
   kickback_must_change_direction_next_player_ok
   kickback_can_be_added_after_a_kickback
   kickback_is_durability_saved
+  kickback_is_first_next_player_is_0
 }
