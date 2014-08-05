@@ -46,7 +46,6 @@ object Deck {
 
   case class PlayCard(gameId: GameId, playerId: PlayerId, card: Card) extends Command
 
-
   sealed abstract class Event(gameId: GameId)
 
   case class GameStarted(gameId: GameId, playerCount: Int, firstCard: Card) extends Event(gameId)
@@ -59,7 +58,7 @@ object Deck {
 
 /**
   */
-object EventSourcing extends App {
+object EventSourcing {
 
   import Deck.Color._
   import Deck._
@@ -91,18 +90,18 @@ object EventSourcing extends App {
     val isStarted = true
   }
 
-  def decide(state: State, command: Command): Event = {
+  def decide(state: State, command: Command): List[Event] = {
     command match {
       case sg: StartGame if state.isStarted => throw new Exception("Not Started")
       case sg: StartGame if sg.playerCount < 3 => throw new Exception("Need more player")
       case sg: StartGame =>
-        GameStarted(sg.gameId, sg.playerCount, sg.firstCard)
+        List(GameStarted(sg.gameId, sg.playerCount, sg.firstCard))
       case pc: PlayCard if pc.playerId != state.nextPlayer =>
-        PlayerFailed(pc.gameId, pc.playerId, pc.card)
+        List(PlayerFailed(pc.gameId, pc.playerId, pc.card))
       case pc: PlayCard if !cardLegal(state.lastCard, pc.card) =>
-        PlayerFailed(pc.gameId, pc.playerId, pc.card)
+        List(PlayerFailed(pc.gameId, pc.playerId, pc.card))
       case pc: PlayCard =>
-        CardPlayed(pc.gameId, pc.playerId, pc.card)
+        List(CardPlayed(pc.gameId, pc.playerId, pc.card))
     }
   }
 
@@ -125,18 +124,15 @@ object EventSourcing extends App {
     (event, state) match {
       case (gs: GameStarted, _) => new PlayedState(gs.playerCount, 1, gs.firstCard, ClockWise)
       case (gs: CardPlayed, ps: PlayedState) =>
-        val direction =
-          gs.card match {
-            case kick: CardKickBack => state.direction.nextDirection
-            case _ => state.direction
-          }
+        val direction = gs.card match {
+          case kick: CardKickBack => state.direction.nextDirection
+          case _ => state.direction
+        }
         ps.copy(nextPlayer = direction.nextPlayer(ps.nextPlayer, ps.playerCount), lastCard = gs.card, direction = direction)
       case (pf: PlayerFailed, _) => state
       case _ => ???
     }
   }
-
-  println("Coucou")
 }
 
 
@@ -155,51 +151,48 @@ object EventSourcingTest extends App {
     val startedKickBackAndMore: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardKickBack(Red)) :: Nil
   }
 
-
-  def when(given: List[Event], command: Command): Event = {
-    decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
-  }
-
-  case class Given(given: List[Event])
-
-  def test(given: List[Event])(when: Command)(then: Try[Event] => Boolean) = {
+  def given(given: List[Event])(when: Command)(then: Try[List[Event]] => Boolean) = {
     val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), when))
     println(result)
     require(then(result))
   }
 
-  def started_game = test(Given.emptyDeck)(StartGame(1, 4, CardDigit(3, Red)))(_ == Success(GameStarted(1, 4, CardDigit(3, Red))))
+  def eq(events: Event*): Try[List[Event]] => Boolean = p => p == Success(events.toList)
 
-  def cannot_start_both = test(Given.startedDeck)(StartGame(1, 4, CardDigit(3, Red)))(p => p.isFailure)
+  val failed: Try[List[Event]] => Boolean = p => p.isFailure
 
-  def not_enough_players = test(Given.emptyDeck)(StartGame(1, 1, CardDigit(3, Red)))(p => p.isFailure)
+  def started_game = given(Given.emptyDeck)(StartGame(1, 4, CardDigit(3, Red)))(eq(GameStarted(1, 4, CardDigit(3, Red))))
 
-  def enough_players = test(Given.emptyDeck)(StartGame(1, 3, CardDigit(3, Red)))(p => p.isSuccess)
+  def cannot_start_both = given(Given.startedDeck)(StartGame(1, 4, CardDigit(3, Red)))(failed)
 
-  def next_card_is_same_color = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Red)))(_ == Success(CardPlayed(1, 2, CardDigit(3, Red))))
+  def not_enough_players = given(Given.emptyDeck)(StartGame(1, 1, CardDigit(3, Red)))(failed)
 
-  def next_card_is_same_number = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(9, Yellow)))(_ == Success(CardPlayed(1, 2, CardDigit(9, Yellow))))
+  def enough_players = given(Given.emptyDeck)(StartGame(1, 3, CardDigit(3, Red)))(eq(GameStarted(1, 3, CardDigit(3, Red))))
 
-  def next_card_is_not_same_color_not_number_but_same_player = test(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 2, CardDigit(3, Yellow))))
+  def next_card_is_same_color = given(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Red)))(eq(CardPlayed(1, 2, CardDigit(3, Red))))
 
-  def next_card_is_not_same_color_not_number = test(Given.simpleDeck)(PlayCard(1, 3, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 3, CardDigit(3, Yellow))))
+  def next_card_is_same_number = given(Given.simpleDeck)(PlayCard(1, 2, CardDigit(9, Yellow)))(eq(CardPlayed(1, 2, CardDigit(9, Yellow))))
 
-  def bad_player_try_to_play = test(Given.simpleDeck)(PlayCard(1, 1, CardDigit(3, Yellow)))(_ == Success(PlayerFailed(1, 1, CardDigit(3, Yellow))))
+  def next_card_is_not_same_color_not_number_but_same_player = given(Given.simpleDeck)(PlayCard(1, 2, CardDigit(3, Yellow)))(eq(PlayerFailed(1, 2, CardDigit(3, Yellow))))
 
-  def kickback_must_change_direction_next_player_failed = test(Given.simpleDeckKickBack)(PlayCard(1, 2, CardDigit(3, Red)))(_ == Success(PlayerFailed(1, 2, CardDigit(3, Red))))
+  def next_card_is_not_same_color_not_number = given(Given.simpleDeck)(PlayCard(1, 3, CardDigit(3, Yellow)))(eq(PlayerFailed(1, 3, CardDigit(3, Yellow))))
 
-  def kickback_must_change_direction_next_player_ok = test(Given.simpleDeckKickBack)(PlayCard(1, 1, CardDigit(3, Red)))(_ == Success(CardPlayed(1, 1, CardDigit(3, Red))))
+  def bad_player_try_to_play = given(Given.simpleDeck)(PlayCard(1, 1, CardDigit(3, Yellow)))(eq(PlayerFailed(1, 1, CardDigit(3, Yellow))))
 
-  def kickback_can_be_added_after_a_kickback = test(Given.simpleDeckKickBack)(PlayCard(1, 1, CardKickBack(Yellow)))(_ == Success(CardPlayed(1, 1, CardKickBack(Yellow))))
+  def kickback_must_change_direction_next_player_failed = given(Given.simpleDeckKickBack)(PlayCard(1, 2, CardDigit(3, Red)))(eq(PlayerFailed(1, 2, CardDigit(3, Red))))
 
-  def kickback_is_durability_saved = test(Given.simpleDeckKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Yellow)))(_ == Success(CardPlayed(1, 0, CardDigit(9, Yellow))))
+  def kickback_must_change_direction_next_player_ok = given(Given.simpleDeckKickBack)(PlayCard(1, 1, CardDigit(3, Red)))(eq(CardPlayed(1, 1, CardDigit(3, Red))))
 
-  def kickback_is_first_next_player_is_0 = test(Given.startedKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Red)))(_ == Success(CardPlayed(1, 0, CardDigit(9, Red))))
+  def kickback_can_be_added_after_a_kickback = given(Given.simpleDeckKickBack)(PlayCard(1, 1, CardKickBack(Yellow)))(eq(CardPlayed(1, 1, CardKickBack(Yellow))))
 
+  def kickback_is_durability_saved = given(Given.simpleDeckKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Yellow)))(eq(CardPlayed(1, 0, CardDigit(9, Yellow))))
+
+  def kickback_is_first_next_player_is_0 = given(Given.startedKickBackAndMore)(PlayCard(1, 0, CardDigit(9, Red)))(eq(CardPlayed(1, 0, CardDigit(9, Red))))
+
+  started_game
   cannot_start_both
   enough_players
   not_enough_players
-  started_game
   next_card_is_same_color
   next_card_is_same_number
   next_card_is_not_same_color_not_number
