@@ -7,9 +7,22 @@ object Deck {
     val Red, Green, Yellow, Blue = Value
   }
 
-  object Direction extends Enumeration {
-    type Direction = Value
-    val ClockWise, CounterClockWise = Value
+  sealed trait Direction {
+    def nextPlayer(player: PlayerId, playerCount: Int): Int
+
+    def nextDirection: Direction
+  }
+
+  object ClockWise extends Direction {
+    def nextPlayer(player: PlayerId, playerCount: Int): Int = (player + 1) % playerCount
+
+    def nextDirection = CounterClockWise
+  }
+
+  object CounterClockWise extends Direction {
+    def nextPlayer(player: PlayerId, playerCount: Int): Int = (player - 1) % playerCount
+
+    def nextDirection = ClockWise
   }
 
   type Digit = Int
@@ -61,6 +74,8 @@ object EventSourcing extends App {
     def nextPlayer: PlayerId
 
     def lastCard: Card
+
+    def direction: Direction
   }
 
   object EmptyState extends State {
@@ -69,9 +84,11 @@ object EventSourcing extends App {
     def nextPlayer = throw new IllegalAccessException()
 
     def lastCard = throw new IllegalAccessException()
+
+    def direction: Direction = throw new IllegalAccessException()
   }
 
-  case class PlayedState(playerCount: Int, nextPlayer: PlayerId, lastCard: Card) extends State {
+  case class PlayedState(playerCount: Int, nextPlayer: PlayerId, lastCard: Card, direction: Direction) extends State {
     val isStarted = true
   }
 
@@ -95,26 +112,29 @@ object EventSourcing extends App {
    */
   def cardLegal(lastCard: Card, newCard: Card): Boolean = {
     if (lastCard.color == newCard.color) true
-
-    lastCard match {
-      case ckb: CardKickBack => newCard.isInstanceOf[CardKickBack]
-      case cd: CardDigit =>
-        newCard match {
-          case newCardCD: CardDigit => newCardCD.digit == cd.digit
-          case _ => false
-        }
-    }
+    else
+      lastCard match {
+        case ckb: CardKickBack => newCard.isInstanceOf[CardKickBack]
+        case cd: CardDigit =>
+          newCard match {
+            case newCardCD: CardDigit => newCardCD.digit == cd.digit
+            case _ => false
+          }
+      }
   }
 
   def appli(state: State, event: Event): State = {
-    event match {
-      case gs: GameStarted => new PlayedState(gs.playerCount, 0, gs.firstCard)
-      case gs: CardPlayed =>
-        state match {
-          case ps: PlayedState => ps.copy(nextPlayer = (ps.nextPlayer + 1) % ps.playerCount, lastCard = gs.card)
-          case _ => ???
-        }
-      case pf: PlayerFailed => state
+    (event, state) match {
+      case (gs: GameStarted, _) => new PlayedState(gs.playerCount, 1, gs.firstCard, ClockWise)
+      case (gs: CardPlayed, ps: PlayedState) =>
+        val direction =
+          gs.card match {
+            case kick: CardKickBack => state.direction.nextDirection
+            case _ => state.direction
+          }
+        ps.copy(nextPlayer = direction.nextPlayer(ps.nextPlayer, ps.playerCount), lastCard = gs.card, direction = direction)
+      case (pf: PlayerFailed, _) => state
+      case _ => ???
     }
   }
 
@@ -132,6 +152,7 @@ object EventSourcingTest extends App {
     val emptyDeck: List[Event] = Nil
     val startedDeck: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: Nil
     val simpleDeck: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 0, CardDigit(9, Red)) :: Nil
+    val simpleDeckKickBack: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardDigit(9, Red)) :: CardPlayed(1, 2, CardKickBack(Red)) :: Nil
   }
 
 
@@ -189,40 +210,40 @@ object EventSourcingTest extends App {
   def next_card_is_same_color {
     // Given
     val given = Given.simpleDeck
-    val command = PlayCard(1, 1, CardDigit(3, Red))
+    val command = PlayCard(1, 2, CardDigit(3, Red))
 
     // When
     val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
 
     // Then
     println(result)
-    require(result == CardPlayed(1, 1, CardDigit(3, Red)))
+    require(result == CardPlayed(1, 2, CardDigit(3, Red)))
   }
 
   def next_card_is_same_number {
     // Given
     val given = Given.simpleDeck
-    val command = PlayCard(1, 1, CardDigit(9, Yellow))
+    val command = PlayCard(1, 2, CardDigit(9, Yellow))
 
     // When
     val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
 
     // Then
     println(result)
-    require(result == CardPlayed(1, 1, command.card))
+    require(result == CardPlayed(1, 2, command.card))
   }
 
   def next_card_is_not_same_color_not_number_but_same_player {
     // Given
     val given = Given.simpleDeck
-    val command = PlayCard(1, 1, CardDigit(3, Yellow))
+    val command = PlayCard(1, 2, CardDigit(3, Yellow))
 
     // When
     val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
 
     // Then
     println(result)
-    require(result == PlayerFailed(1, 1, command.card))
+    require(result == PlayerFailed(1, 2, command.card))
   }
 
   def next_card_is_not_same_color_not_number {
@@ -251,18 +272,31 @@ object EventSourcingTest extends App {
     require(result == PlayerFailed(1, 1, command.card))
   }
 
-  def started_game_should_be_started {
+  def kickback_must_change_direction_next_player_failed {
     // Given
-    val given = Given.simpleDeck
+    val given = Given.simpleDeckKickBack
+    val command = PlayCard(1, 2, CardDigit(3, Red))
 
     // When
-    val result = given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event))
+    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
 
     // Then
     println(result)
-    result == ???
+    require(result == PlayerFailed(1, 2, command.card))
   }
 
+  def kickback_must_change_direction_next_player_ok {
+    // Given
+    val given = Given.simpleDeckKickBack
+    val command = PlayCard(1, 1, CardDigit(3, Red))
+
+    // When
+    val result = decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), command)
+
+    // Then
+    println(result)
+    require(result == CardPlayed(1, 1, command.card))
+  }
 
   cannot_start_both
   enough_players
@@ -273,5 +307,6 @@ object EventSourcingTest extends App {
   next_card_is_not_same_color_not_number
   next_card_is_not_same_color_not_number_but_same_player
   bad_player_try_to_play
-  started_game_should_be_started
+  kickback_must_change_direction_next_player_failed
+  kickback_must_change_direction_next_player_ok
 }
