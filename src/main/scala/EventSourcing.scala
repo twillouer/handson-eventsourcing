@@ -1,3 +1,5 @@
+import javafx.beans.binding.When
+
 import scala.util.{Success, Try}
 
 object Deck {
@@ -151,11 +153,26 @@ object EventSourcingTest extends App {
     val startedKickBackAndMore: List[Event] = GameStarted(1, 4, CardDigit(3, Red)) :: CardPlayed(1, 1, CardKickBack(Red)) :: Nil
   }
 
+  case class Given(given: List[Event]) {
+    def |>(when:Command) = new When(given, when)
+  }
+
+  case class When(given: List[Event], when:Command) {
+    def |>(then:Event*) = {
+      require(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), when) == then.toList)
+    }
+  }
+
   def given(given: List[Event])(when: Command)(then: Try[List[Event]] => Boolean) = {
     val result = Try(decide(given.foldLeft(EmptyState.asInstanceOf[State])((s, event) => appli(s, event)), when))
     println(result)
     require(then(result))
   }
+
+  import language.postfixOps
+  Given (Given.emptyDeck).
+  |> (StartGame(1, 4, CardDigit(3, Red))).
+  |> (GameStarted(1, 4, CardDigit(3, Red)))
 
   def eq(events: Event*): Try[List[Event]] => Boolean = p => p == Success(events.toList)
 
